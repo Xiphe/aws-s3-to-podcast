@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  tagesform_transcribe_meta
+
+Parameters:
+  AppBucketName:
+    Type: String
+    Description: 'REQUIRED: Unique S3 bucket name to use for the app.'
+
+Resources:
+  S3JsonLoggerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./build
+      Handler: handler.default
+      Runtime: nodejs14.x
+      Architectures:
+        - x86_64
+      MemorySize: 128
+      Timeout: 60
+      Policies:
+        S3ReadPolicy:
+          BucketName: !Ref AppBucketName
+      Events:
+        S3NewObjectEvent:
+          Type: S3
+          Properties:
+            Bucket: !Ref AppBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: '.mp3'
+  AppBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref AppBucketName
+  AppBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AppBucket
+      PolicyDocument: |
+        {
+            "Version": "2008-10-17",
+            "Statement": [
+                {
+                    "Sid": "AllowPublicRead",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": "*"
+                    },
+                    "Action": "s3:GetObject",
+                    "Resource": "arn:aws:s3:::tagesform/*"
+                }
+            ]
+        }

@@ -33,7 +33,7 @@ function parseText(comment: string): Record<string, any> {
     tags: Array.isArray(t)
       ? t
       : typeof t === 'string'
-      ? t.split(',')
+      ? t.split(',').map((t) => t.trim())
       : undefined,
     date:
       typeof date === 'string'
@@ -86,6 +86,7 @@ const handler: S3Handler = async ({ Records }, context) => {
       const data: Record<string, any> = {
         title: tags.title,
         length,
+        file: Key,
         duration: humanReadableDuration(length),
         ...extraData(Key, tags),
         ...parseText(tags.comment.text),
@@ -100,12 +101,8 @@ const handler: S3Handler = async ({ Records }, context) => {
         );
       }
 
-      const metaKey = path.join(
-        Folder,
-        GENERATED_FOLDER,
-        'meta',
-        `${FileName}.json`,
-      );
+      const metaFolder = path.join(Folder, GENERATED_FOLDER, 'meta');
+      const metaKey = path.join(metaFolder, `${FileName}.json`);
 
       try {
         const existing = await s3.getObject({ Key: metaKey, Bucket }).promise();
@@ -153,6 +150,24 @@ const handler: S3Handler = async ({ Records }, context) => {
           Body: JSON.stringify(data),
         })
         .promise();
+
+      const { Contents } = await s3
+        .listObjects({
+          Bucket,
+          Prefix: metaFolder,
+        })
+        .promise();
+
+      const index = Contents.map(({ Key }) => path.relative(metaFolder, Key));
+
+      await s3
+        .putObject({
+          Bucket,
+          Key: path.join(metaFolder, 'index.json'),
+          Body: JSON.stringify(index),
+        })
+        .promise();
+      console.log('Index updated');
     }),
   );
 };

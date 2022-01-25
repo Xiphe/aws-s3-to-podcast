@@ -23,8 +23,14 @@ Resources:
           NODE_OPTIONS: '--enable-source-maps'
       Timeout: 60
       Policies:
-        S3ReadPolicy:
-          BucketName: !Ref AppBucketName
+        - S3CrudPolicy:
+            BucketName: !Ref AppBucketName
+        - Version: '2012-10-17'
+          Statement:
+            Effect: Allow
+            Action:
+              - transcribe:StartTranscriptionJob
+            Resource: '*'
       Events:
         S3NewObjectEvent:
           Type: S3

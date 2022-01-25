@@ -1,0 +1,11 @@
+version = 0.1
+[prod]
+[prod.deploy]
+[prod.deploy.parameters]
+stack_name = "tagesform-transcribe-meta-prod"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-1lp2trv7ifrwg"
+s3_prefix = "tagesform-transcribe-meta-prod"
+region = "eu-central-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "AppBucketName=\"tagesform\""
+image_repositories = []

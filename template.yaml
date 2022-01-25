@@ -18,6 +18,9 @@ Resources:
       Architectures:
         - x86_64
       MemorySize: 128
+      Environment:
+        Variables:
+          NODE_OPTIONS: '--enable-source-maps'
       Timeout: 60
       Policies:
         S3ReadPolicy:

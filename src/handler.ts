@@ -158,7 +158,9 @@ const handler: S3Handler = async ({ Records }, context) => {
         })
         .promise();
 
-      const index = Contents.map(({ Key }) => path.relative(metaFolder, Key));
+      const index = Contents.map(({ Key }) =>
+        path.relative(metaFolder, Key),
+      ).filter((k) => k !== 'index.json');
 
       await s3
         .putObject({

@@ -6,6 +6,7 @@ import TranscribeService from 'aws-sdk/clients/transcribeservice';
 import S3 from 'aws-sdk/clients/s3';
 import { zonedTimeToUtc } from 'date-fns-tz';
 import {
+  parse,
   millisecondsToHours,
   hoursToMilliseconds,
   millisecondsToMinutes,
@@ -17,8 +18,23 @@ import mime from 'mime';
 
 const AWS_REGION = 'eu-central-1';
 const GENERATED_FOLDER = 'X';
-const TIMEZONE = 'Europe/Berlin';
+// const TIMEZONE = 'Europe/Berlin';
 const LANGUAGE_CODE = 'de-DE';
+
+function parseDate(
+  dateStr: string,
+  formats: string[] = ['dd.MM.yyyy HH:mm', 'dd.MM.yyyy'],
+): Date {
+  const r = parse(dateStr, formats.shift(), Date.now());
+  if (isNaN(r.getTime())) {
+    if (formats.length) {
+      return parseDate(dateStr, formats);
+    } else {
+      return new Date(dateStr);
+    }
+  }
+  return r;
+}
 
 function parseText(comment: string): Record<string, any> {
   const text = comment.split(/^\s*--\s*\n/gm);
@@ -35,10 +51,7 @@ function parseText(comment: string): Record<string, any> {
       : typeof t === 'string'
       ? t.split(',').map((t) => t.trim())
       : undefined,
-    date:
-      typeof date === 'string'
-        ? zonedTimeToUtc(new Date(date), TIMEZONE).toISOString()
-        : undefined,
+    date: typeof date === 'string' ? parseDate(date).toISOString() : undefined,
     extra: extraRest,
   };
 }
@@ -68,7 +81,8 @@ const handler: S3Handler = async ({ Records }, context) => {
       const Bucket = record.s3.bucket.name;
       const Key = record.s3.object.key.replace(/\+/g, ' ');
       const Folder = path.dirname(Key);
-      const FileName = path.basename(Key, path.extname(Key));
+      const Ext = path.extname(Key);
+      const FileName = path.basename(Key, Ext);
       const file = await s3
         .getObject({
           Bucket,
@@ -84,13 +98,19 @@ const handler: S3Handler = async ({ Records }, context) => {
 
       const length = parseInt(tags.length, 10);
       const data: Record<string, any> = {
-        title: tags.title,
+        title: tags.title.replace(/Tagesform\s*([0-9,.]+)\s*-\s/, ''),
         length,
-        file: Key,
+        file: `${Folder}/${encodeURIComponent(FileName)}${Ext}`,
         duration: humanReadableDuration(length),
         ...extraData(Key, tags),
         ...parseText(tags.comment.text),
       };
+
+      if (!data.date) {
+        data.date = (
+          await s3.headObject({ Bucket, Key }).promise()
+        ).LastModified.toISOString();
+      }
 
       if (tags.image && typeof tags.image !== 'string') {
         data.image = await makeCoverAvailable(

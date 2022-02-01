@@ -79,7 +79,12 @@ const handler: S3Handler = async ({ Records }, context) => {
   await Promise.all(
     Records.map(async (record) => {
       const Bucket = record.s3.bucket.name;
-      const Key = record.s3.object.key.replace(/\+/g, ' ');
+      const Key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
+      console.log('Handling', {
+        Bucket,
+        Key,
+        OriginalKey: record.s3.object.key,
+      });
       const Folder = path.dirname(Key);
       const Ext = path.extname(Key);
       const FileName = path.basename(Key, Ext);

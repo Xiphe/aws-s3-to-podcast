@@ -13,6 +13,7 @@
   "devDependencies": {
     "@types/aws-lambda": "8.10.91",
     "@types/mime": "2.0.3",
+    "@types/node": "17.0.14",
     "aws-sdk": "2.1063.0",
     "aws-sdk-mock": "^5.1.0",
     "date-fns": "2.28.0",

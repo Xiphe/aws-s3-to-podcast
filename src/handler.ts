@@ -60,11 +60,13 @@ function extraData(Key: string, tags: Tags) {
   const extraData: Record<string, any> = {};
   if (Key.startsWith('s2')) {
     extraData.season = 2;
+  } else if (Key.match(/tagesform_[0-9.]}\.mp3/)) {
+    extraData.season = 1;
   }
 
-  const m = tags.title.match(/Tagesform\s*([0-9,.]+)/);
-  if (m && m[1]) {
-    extraData.episode = parseInt(m[1], 10);
+  const m = (tags.title || Key).match(/[Tt]agesform(\s*|_)([0-9,.]+)/);
+  if (m && m[2]) {
+    extraData.episode = parseInt(m[2], 10);
   }
 
   return extraData;
@@ -76,127 +78,130 @@ const ts = new TranscribeService({
 });
 
 const handler: S3Handler = async ({ Records }, context) => {
-  await Promise.all(
-    Records.map(async (record) => {
-      const Bucket = record.s3.bucket.name;
-      const Key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
-      console.log('Handling', {
+  await Records.reduce(async (p, record) => {
+    await p;
+    const Bucket = record.s3.bucket.name;
+    const Key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
+    console.log('Handling', {
+      Bucket,
+      Key,
+      OriginalKey: record.s3.object.key,
+    });
+    const Folder = path.dirname(Key);
+    const Ext = path.extname(Key);
+    const FileName = path.basename(Key, Ext);
+    const file = await s3
+      .getObject({
         Bucket,
         Key,
-        OriginalKey: record.s3.object.key,
-      });
-      const Folder = path.dirname(Key);
-      const Ext = path.extname(Key);
-      const FileName = path.basename(Key, Ext);
-      const file = await s3
-        .getObject({
-          Bucket,
-          Key,
+      })
+      .promise();
+
+    if (!(file.Body instanceof Buffer)) {
+      throw new Error('Expected Body to be Buffer');
+    }
+
+    const tags = NodeID3.read(file.Body);
+
+    const length = tags.length
+      ? parseInt(tags.length, 10)
+      : require('get-mp3-duration')(file.Body);
+    const data: Record<string, any> = {
+      ...(tags.title
+        ? { title: tags.title.replace(/Tagesform\s*([0-9,.]+)\s*-\s/, '') }
+        : {}),
+      length,
+      file: `${Folder}/${encodeURIComponent(FileName)}${Ext}`,
+      duration: humanReadableDuration(length),
+      ...extraData(Key, tags),
+      ...(tags.comment ? parseText(tags.comment.text) : {}),
+    };
+
+    if (!data.date) {
+      data.date = (
+        await s3.headObject({ Bucket, Key }).promise()
+      ).LastModified.toISOString();
+    }
+
+    if (tags.image && typeof tags.image !== 'string') {
+      data.image = await makeCoverAvailable(
+        tags.image.imageBuffer,
+        tags.image.mime,
+        Folder,
+        Bucket,
+      );
+    }
+
+    const metaFolder = path.join(Folder, GENERATED_FOLDER, 'meta');
+    const metaKey = path.join(metaFolder, `${FileName}.json`);
+
+    try {
+      const existing = await s3.getObject({ Key: metaKey, Bucket }).promise();
+      const prevData = JSON.parse(existing.Body.toString());
+      if (!prevData.transcription || prevData.length !== data.length) {
+        throw new Error('Length different');
+      }
+      data.transcription = prevData.transcription;
+    } catch {
+      const transcriptKey = path.join(
+        Folder,
+        GENERATED_FOLDER,
+        'transcript',
+        `${FileName.replace(/[^a-zA-Z0-9-_.!*'()/]/g, '-').replace(
+          /-+/g,
+          '-',
+        )}.json`,
+      );
+      const jobName = `${FileName.replace(/[^0-9a-zA-Z._-]/g, '-')
+        .replace(/-+/g, '-')
+        .substring(0, 100)}--${Date.now()}`;
+
+      await ts
+        .startTranscriptionJob({
+          LanguageCode: LANGUAGE_CODE,
+          Media: {
+            MediaFileUri: `s3://${Bucket}/${Key}`,
+          },
+          MediaFormat: 'mp3',
+          TranscriptionJobName: jobName,
+          OutputBucketName: Bucket,
+          OutputKey: transcriptKey,
         })
         .promise();
+      console.log('Started Transcription job', jobName);
 
-      if (!(file.Body instanceof Buffer)) {
-        throw new Error('Expected Body to be Buffer');
-      }
+      data.transcription = transcriptKey;
+    }
 
-      const tags = NodeID3.read(file.Body);
+    console.log(`Extracted Meta`, data);
+    await s3
+      .putObject({
+        Bucket,
+        Key: metaKey,
+        Body: JSON.stringify(data),
+      })
+      .promise();
 
-      const length = parseInt(tags.length, 10);
-      const data: Record<string, any> = {
-        title: tags.title.replace(/Tagesform\s*([0-9,.]+)\s*-\s/, ''),
-        length,
-        file: `${Folder}/${encodeURIComponent(FileName)}${Ext}`,
-        duration: humanReadableDuration(length),
-        ...extraData(Key, tags),
-        ...parseText(tags.comment.text),
-      };
+    const { Contents } = await s3
+      .listObjects({
+        Bucket,
+        Prefix: metaFolder,
+      })
+      .promise();
 
-      if (!data.date) {
-        data.date = (
-          await s3.headObject({ Bucket, Key }).promise()
-        ).LastModified.toISOString();
-      }
+    const index = Contents.map(({ Key }) =>
+      path.relative(metaFolder, Key),
+    ).filter((k) => k !== 'index.json');
 
-      if (tags.image && typeof tags.image !== 'string') {
-        data.image = await makeCoverAvailable(
-          tags.image.imageBuffer,
-          tags.image.mime,
-          Folder,
-          Bucket,
-        );
-      }
-
-      const metaFolder = path.join(Folder, GENERATED_FOLDER, 'meta');
-      const metaKey = path.join(metaFolder, `${FileName}.json`);
-
-      try {
-        const existing = await s3.getObject({ Key: metaKey, Bucket }).promise();
-        const prevData = JSON.parse(existing.Body.toString());
-        if (!prevData.transcription || prevData.length !== data.length) {
-          throw new Error('Length different');
-        }
-        data.transcription = prevData.transcription;
-      } catch {
-        const transcriptKey = path.join(
-          Folder,
-          GENERATED_FOLDER,
-          'transcript',
-          `${FileName.replace(/[^a-zA-Z0-9-_.!*'()/]/g, '-').replace(
-            /-+/g,
-            '-',
-          )}.json`,
-        );
-        const jobName = `${FileName.replace(/[^0-9a-zA-Z._-]/g, '-')
-          .replace(/-+/g, '-')
-          .substring(0, 100)}--${Date.now()}`;
-
-        await ts
-          .startTranscriptionJob({
-            LanguageCode: LANGUAGE_CODE,
-            Media: {
-              MediaFileUri: `s3://${Bucket}/${Key}`,
-            },
-            MediaFormat: 'mp3',
-            TranscriptionJobName: jobName,
-            OutputBucketName: Bucket,
-            OutputKey: transcriptKey,
-          })
-          .promise();
-        console.log('Started Transcription job', jobName);
-
-        data.transcription = transcriptKey;
-      }
-
-      console.log(`Extracted Meta`, data);
-      await s3
-        .putObject({
-          Bucket,
-          Key: metaKey,
-          Body: JSON.stringify(data),
-        })
-        .promise();
-
-      const { Contents } = await s3
-        .listObjects({
-          Bucket,
-          Prefix: metaFolder,
-        })
-        .promise();
-
-      const index = Contents.map(({ Key }) =>
-        path.relative(metaFolder, Key),
-      ).filter((k) => k !== 'index.json');
-
-      await s3
-        .putObject({
-          Bucket,
-          Key: path.join(metaFolder, 'index.json'),
-          Body: JSON.stringify(index),
-        })
-        .promise();
-      console.log('Index updated');
-    }),
-  );
+    await s3
+      .putObject({
+        Bucket,
+        Key: path.join(metaFolder, 'index.json'),
+        Body: JSON.stringify(index),
+      })
+      .promise();
+    console.log('Index updated');
+  }, Promise.resolve());
 };
 
 function isRecord(thing: unknown): thing is Record<string, unknown> {

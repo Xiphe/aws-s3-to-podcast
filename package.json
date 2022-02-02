@@ -20,6 +20,7 @@
     "date-fns-tz": "1.2.2",
     "esbuild": "0.14.13",
     "esbuild-register": "3.3.2",
+    "get-mp3-duration": "1.0.0",
     "mime": "3.0.0",
     "node-id3": "0.2.3",
     "tempy": "2.0.0",
